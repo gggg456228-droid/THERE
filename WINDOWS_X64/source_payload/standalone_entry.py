@@ -40,6 +40,12 @@ def _version_tuple(value):
 
 def _executable_path():
     try:
+        arg0 = Path(sys.argv[0]).resolve()
+        if arg0.suffix.lower() == ".exe":
+            return arg0
+    except Exception:
+        pass
+    try:
         candidate = Path(sys.executable).resolve()
         if candidate.suffix.lower() == ".exe":
             return candidate
@@ -398,6 +404,11 @@ def _start_server(port):
 
 
 def main():
+    self_test = "--self-test" in sys.argv
+    if self_test:
+        os.environ["THERE_DISABLE_UPDATE"] = "1"
+        os.environ["THERE_NO_BROWSER"] = "1"
+
     if maybe_update_from_github():
         return 0
     data_dir()
@@ -410,9 +421,15 @@ def main():
     if not wait_until_alive(url):
         print("Сервер THERE не успел запуститься.")
         stop_server()
-        if sys.stdin.isatty():
+        if sys.stdin.isatty() and not self_test:
             input("Нажмите Enter для выхода.")
         return 1
+
+    if self_test:
+        print(f"THERE_SELF_TEST_OK {url}")
+        stop_server()
+        return 0
+
     open_site(url)
     try:
         _run_console_animation(url)
