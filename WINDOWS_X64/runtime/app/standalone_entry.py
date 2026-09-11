@@ -1,5 +1,11 @@
 import atexit
 import os
+import random
+from pathlib import Path
+import zipfile
+import tempfile
+import json
+import hashlib
 import shutil
 import socket
 import sys
@@ -11,7 +17,135 @@ import webbrowser
 PORT = 33851
 HOST = "127.0.0.1"
 URL = f"http://{HOST}:{PORT}/"
-LINK_TEXT = "https://github.com/gggg456228-droid/THERE"
+LINK_TEXT = "https://t.me/pluf255"
+UPDATE_MANIFEST_URL = "https://raw.githubusercontent.com/gggg456228-droid/THERE/main/update/latest.json"
+UPDATE_USER_AGENT = "THERE-Python-Updater/2"
+
+
+def _version_tuple(value):
+    clean = str(value or "").strip().split("-", 1)[0].split("+", 1)[0]
+    parts = []
+    for item in clean.split("."):
+        try:
+            parts.append(int(item))
+        except Exception:
+            parts.append(0)
+    return tuple(parts)
+
+
+def _installation_root():
+    here = Path(__file__).resolve()
+    candidates = [here.parents[2], Path.cwd()]
+    for root in candidates:
+        if (root / "VERSION.txt").is_file():
+            return root
+    return here.parents[2]
+
+
+def _read_local_version(root):
+    try:
+        return (root / "VERSION.txt").read_text(encoding="utf-8").strip() or "0"
+    except Exception:
+        return "0"
+
+
+def _download_bytes(url, limit):
+    request = urllib.request.Request(url, headers={"User-Agent": UPDATE_USER_AGENT})
+    with urllib.request.urlopen(request, timeout=12) as response:
+        if getattr(response, "status", 200) != 200:
+            raise RuntimeError(f"HTTP {getattr(response, 'status', '?')}")
+        data = response.read(limit + 1)
+    if len(data) > limit:
+        raise RuntimeError("Файл обновления слишком большой")
+    return data
+
+
+def _safe_extract_zip(archive_path, target_dir):
+    target_dir = Path(target_dir).resolve()
+    with zipfile.ZipFile(archive_path, "r") as archive:
+        for info in archive.infolist():
+            target = (target_dir / info.filename).resolve()
+            if target != target_dir and target_dir not in target.parents:
+                raise RuntimeError("Небезопасный путь в архиве обновления")
+        archive.extractall(target_dir)
+
+
+def _schedule_python_update(root, extracted, temp_root):
+    if os.name != "nt":
+        return False
+    helper = Path(tempfile.gettempdir()) / f"there-update-{os.getpid()}.cmd"
+    exe = Path(root) / "THERE.exe"
+    current_pid = os.getpid()
+    parent_pid = os.getppid()
+    lines = [
+        "@echo off",
+        "setlocal",
+        f'set "PY_PID={current_pid}"',
+        f'set "PARENT_PID={parent_pid}"',
+        ":wait_python",
+        'tasklist /FI "PID eq %PY_PID%" 2>NUL | find "%PY_PID%" >NUL',
+        "if not errorlevel 1 (",
+        "  timeout /t 1 /nobreak >NUL",
+        "  goto wait_python",
+        ")",
+        ":wait_parent",
+        'tasklist /FI "PID eq %PARENT_PID%" 2>NUL | find "%PARENT_PID%" >NUL',
+        "if not errorlevel 1 (",
+        "  timeout /t 1 /nobreak >NUL",
+        "  goto wait_parent",
+        ")",
+        f'robocopy "{extracted}" "{root}" /E /COPY:DAT /R:3 /W:1 >NUL',
+        f'start "" "{exe}" --skip-update-once',
+        f'rmdir /S /Q "{temp_root}" 2>NUL',
+        'del "%~f0"',
+    ]
+    helper.write_text("\r\n".join(lines) + "\r\n", encoding="utf-8", newline="")
+    import subprocess
+    subprocess.Popen(["cmd.exe", "/C", "start", "", "/min", str(helper)], close_fds=True)
+    return True
+
+
+def maybe_update_from_github():
+    if os.name != "nt" or os.environ.get("THERE_DISABLE_UPDATE") == "1":
+        return False
+    if "--skip-update-once" in sys.argv:
+        return False
+
+    root = _installation_root()
+    local_version = _read_local_version(root)
+    temp_root = None
+    try:
+        manifest = json.loads(_download_bytes(UPDATE_MANIFEST_URL, 64 * 1024).decode("utf-8"))
+        remote_version = str(manifest.get("version") or "").strip()
+        bundle_url = str(manifest.get("windows_bundle_url") or "").strip()
+        expected_sha = str(manifest.get("sha256") or "").strip().lower()
+        if not remote_version or not bundle_url or _version_tuple(remote_version) <= _version_tuple(local_version):
+            return False
+
+        print(f"Найдено обновление THERE {local_version} -> {remote_version}. Загружаю...")
+        temp_root = Path(tempfile.mkdtemp(prefix="there-update-"))
+        archive_path = temp_root / "update.zip"
+        extracted = temp_root / "new"
+        payload = _download_bytes(bundle_url, 300 * 1024 * 1024)
+        archive_path.write_bytes(payload)
+        if expected_sha and hashlib.sha256(payload).hexdigest().lower() != expected_sha:
+            raise RuntimeError("SHA256 обновления не совпал")
+        extracted.mkdir(parents=True, exist_ok=True)
+        _safe_extract_zip(archive_path, extracted)
+        if not (extracted / "THERE.exe").is_file() or not (extracted / "runtime" / "app" / "standalone_entry.py").is_file():
+            raise RuntimeError("Пакет обновления неполный")
+        if _schedule_python_update(root, extracted, temp_root):
+            print("Обновление загружено. THERE сейчас перезапустится.")
+            return True
+    except Exception as exc:
+        if temp_root is not None:
+            try:
+                shutil.rmtree(temp_root, ignore_errors=True)
+            except Exception:
+                pass
+        print(f"Проверка обновлений не удалась, запускаю текущую версию: {exc}")
+    return False
+
 
 _stop_event = threading.Event()
 _server = None
@@ -166,11 +300,36 @@ def _run_console_animation():
 
     colors = [9, 10, 11, 12, 13, 14]
     color_index = 0
-    x = 0
-    y = 6
-    dx = 1
-    dy = 1
+    x = 0.0
+    y = 6.0
+    rng = random.SystemRandom()
+    vx = 1.0
+    vy = 0.63
     previous = None
+
+    def choose_velocity(hit_x=False, hit_y=False):
+        nonlocal vx, vy
+
+        # После каждого удара меняем угол и скорость. Поэтому ссылка не
+        # застревает на одной диагонали и со временем обходит всё окно.
+        x_speed = rng.uniform(0.72, 1.38)
+        y_speed = rng.uniform(0.38, 1.12)
+
+        if hit_x:
+            vx = x_speed if vx < 0 else -x_speed
+        else:
+            vx = x_speed if rng.random() < 0.5 else -x_speed
+
+        if hit_y:
+            vy = y_speed if vy < 0 else -y_speed
+        else:
+            vy = y_speed if rng.random() < 0.5 else -y_speed
+
+        # Не даём траектории стать почти горизонтальной или вертикальной.
+        if abs(vx / vy) < 0.55:
+            vx = (1 if vx >= 0 else -1) * abs(vy) * rng.uniform(0.65, 1.25)
+        elif abs(vy / vx) < 0.35:
+            vy = (1 if vy >= 0 else -1) * abs(vx) * rng.uniform(0.45, 0.95)
 
     def move_cursor(px, py):
         kernel32.SetConsoleCursorPosition(handle, COORD(int(px), int(py)))
@@ -185,40 +344,37 @@ def _run_console_animation():
             min_y = 6
             max_y = max(min_y, size.lines - 2)
 
-            x = min(max(0, x), max_x)
-            y = min(max(min_y, y), max_y)
+            x = min(max(0.0, x), float(max_x))
+            y = min(max(float(min_y), y), float(max_y))
 
-            if previous is not None:
+            draw_x = int(round(x))
+            draw_y = int(round(y))
+
+            if previous is not None and previous != (draw_x, draw_y):
                 move_cursor(previous[0], previous[1])
                 kernel32.SetConsoleTextAttribute(handle, 7)
                 sys.stdout.write(" " * len(LINK_TEXT))
 
-            move_cursor(x, y)
+            move_cursor(draw_x, draw_y)
             kernel32.SetConsoleTextAttribute(handle, colors[color_index])
             sys.stdout.write(LINK_TEXT)
             sys.stdout.flush()
-            previous = (x, y)
+            previous = (draw_x, draw_y)
 
-            next_x = x + dx
-            next_y = y + dy
-            bounced = False
+            next_x = x + vx
+            next_y = y + vy
+            hit_x = next_x < 0 or next_x > max_x
+            hit_y = next_y < min_y or next_y > max_y
 
-            if next_x < 0 or next_x > max_x:
-                dx *= -1
-                next_x = x + dx
-                bounced = True
-
-            if next_y < min_y or next_y > max_y:
-                dy *= -1
-                next_y = y + dy
-                bounced = True
-
-            if bounced:
+            if hit_x or hit_y:
+                choose_velocity(hit_x=hit_x, hit_y=hit_y)
                 color_index = (color_index + 1) % len(colors)
+                next_x = min(max(0.0, x + vx), float(max_x))
+                next_y = min(max(float(min_y), y + vy), float(max_y))
 
             x = next_x
             y = next_y
-            _stop_event.wait(0.065)
+            _stop_event.wait(0.055)
     finally:
         try:
             kernel32.SetConsoleTextAttribute(handle, 7)
@@ -253,6 +409,9 @@ def _start_server():
 
 
 def main():
+    if maybe_update_from_github():
+        return 0
+
     data_dir()
     os.environ["THERE_PORT"] = str(PORT)
     _install_windows_ctrl_handler()

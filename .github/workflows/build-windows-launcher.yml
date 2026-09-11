@@ -7,6 +7,7 @@ on:
       - "WINDOWS_X64/launcher_source/**"
       - "WINDOWS_X64/runtime/app/**"
       - "WINDOWS_X64/VERSION.txt"
+      - "requirements.txt"
       - ".github/workflows/build-windows-launcher.yml"
   workflow_dispatch:
 
@@ -33,12 +34,18 @@ jobs:
           go-version: "1.23.x"
           cache: false
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
       - name: Build launcher and update bundle
         shell: bash
         run: |
           set -euo pipefail
           rm -rf /tmp/there-release
           mkdir -p /tmp/there-release/bundle/runtime/app
+          mkdir -p /tmp/there-release/bundle/runtime/packages
 
           pushd WINDOWS_X64/launcher_source >/dev/null
           GOOS=windows GOARCH=amd64 CGO_ENABLED=0 \
@@ -46,13 +53,33 @@ jobs:
           popd >/dev/null
 
           cp WINDOWS_X64/VERSION.txt /tmp/there-release/bundle/VERSION.txt
-          cp -a WINDOWS_X64/runtime/app/. /tmp/there-release/bundle/runtime/app/
 
-          cat > /tmp/there-release/bundle/README_FIRST.txt <<'EOF'
+          # The complete application source is stored as one archive so the
+          # repository cannot accidentally publish a half-populated runtime.
+          unzip -q WINDOWS_X64/runtime/app/full_app.zip -d /tmp/there-release/bundle/runtime/app
+
+          # Vendor dependencies into the portable update. Native Linux speedup
+          # modules are optional and are removed so the payload stays portable
+          # across Windows Python 3.10+ installations.
+          python -m pip install \
+            --disable-pip-version-check \
+            --no-compile \
+            --target /tmp/there-release/bundle/runtime/packages \
+            -r requirements.txt
+          find /tmp/there-release/bundle/runtime/packages -type f -name '*.so' -delete
+          find /tmp/there-release/bundle/runtime/packages -type d -name '__pycache__' -prune -exec rm -rf {} + || true
+
+          test -f /tmp/there-release/bundle/runtime/app/standalone_entry.py
+          test -f /tmp/there-release/bundle/runtime/app/flask_server.py
+          test -f /tmp/there-release/bundle/runtime/app/embedded_templates.py
+          test -d /tmp/there-release/bundle/runtime/packages/flask
+          test -d /tmp/there-release/bundle/runtime/packages/waitress
+
+          cat > /tmp/there-release/bundle/README_FIRST.txt <<'READMEEOF'
           THERE Windows update payload.
-          Keep your existing installation folder. THERE.exe applies newer payloads automatically on startup.
+          THERE.exe checks GitHub for a newer version on startup and installs it automatically.
           User data is stored outside the application folder under %LOCALAPPDATA%\THERE\data.
-          EOF
+          READMEEOF
 
           mkdir -p /tmp/there-release/dist
           (cd /tmp/there-release/bundle && zip -9 -r /tmp/there-release/dist/THERE_WINDOWS_X64.zip . >/dev/null)
@@ -61,13 +88,13 @@ jobs:
           VERSION=$(tr -d '\r\n ' < WINDOWS_X64/VERSION.txt)
 
           mkdir -p /tmp/there-release/update
-          cat > /tmp/there-release/update/latest.json <<EOF
+          cat > /tmp/there-release/update/latest.json <<JSONEOF
           {
             "version": "${VERSION}",
             "windows_bundle_url": "https://raw.githubusercontent.com/gggg456228-droid/THERE/main/dist/THERE_WINDOWS_X64.zip",
             "sha256": "${SHA}"
           }
-          EOF
+          JSONEOF
 
       - name: Commit generated updater artifacts
         shell: bash

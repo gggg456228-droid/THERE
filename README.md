@@ -4,20 +4,20 @@ THERE is a local character/campaign management application. The web UI is served
 
 ## Windows auto-update
 
-`THERE.exe` checks this public GitHub repository on startup. The launcher reads `update/latest.json`; when a newer version is available it downloads the current Windows bundle, verifies its SHA-256, stages the update, replaces the application files after the running launcher exits, and starts the new version automatically.
+`THERE.exe` checks the GitHub update manifest on startup. The launcher reads `update/latest.json`; when a newer version is available it downloads the current Windows bundle, verifies its SHA-256, stages the update, replaces the application files after the running launcher exits, and starts the new version automatically.
 
-If GitHub is temporarily unavailable, update checking fails open and THERE starts the installed version.
+The Python entry point also performs the same update check as a fallback for older launchers. If GitHub is temporarily unavailable, update checking fails open and THERE starts the installed version.
+
+For updater installations that do not contain GitHub credentials, the repository or the update files referenced by `update/latest.json` must be publicly readable. Do not embed a personal GitHub token in THERE.
 
 User data is stored outside the application directory in `%LOCALAPPDATA%\THERE\data`. The updater replaces application files only and does not overwrite characters, local campaign data, or backups.
 
-## Public source
+## Runtime packaging
 
-The public tree is intentionally cleaned of local user data, session keys, private signing keys, machine-specific user paths, personal contact details, and old Android signing metadata.
-
-The old Android APK is not published here because the supplied APK was signed with an identifying developer certificate. A future Android release should be rebuilt and signed with a clean project identity before publication.
+The complete application source used by the Windows release is stored in `WINDOWS_X64/runtime/app/full_app.zip`. The release workflow extracts it and vendors the Python dependencies from `requirements.txt` into `runtime/packages`, so a generated update is not missing Flask, Waitress, templates, or other runtime files.
 
 ## Updating a release
 
 Bump `WINDOWS_X64/VERSION.txt` and push source changes. GitHub Actions rebuilds `WINDOWS_X64/THERE.exe`, creates the portable Windows bundle, refreshes `update/latest.json`, and commits generated artifacts with `[skip ci]` to avoid a workflow loop.
 
-No Git installation or private GitHub authentication is required on the player's PC.
+No Git installation or private GitHub authentication is required on the player's PC when the update endpoint is public.
