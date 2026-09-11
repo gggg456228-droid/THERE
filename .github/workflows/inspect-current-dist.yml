@@ -1,0 +1,24 @@
+name: Inspect current THERE dist
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/inspect-current-dist.yml"
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: List archive
+        shell: bash
+        run: |
+          set -euxo pipefail
+          ls -lh dist/THERE_WINDOWS_X64.zip || true
+          python - <<'PY'
+          import zipfile
+          p='dist/THERE_WINDOWS_X64.zip'
+          with zipfile.ZipFile(p) as z:
+              for i in z.infolist():
+                  print(i.filename, i.file_size)
+          PY
