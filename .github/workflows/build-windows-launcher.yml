@@ -1,11 +1,10 @@
-name: Build Windows update
+name: Build standalone Windows release
 
 on:
   push:
     branches: [main]
     paths:
-      - "WINDOWS_X64/launcher_source/**"
-      - "WINDOWS_X64/runtime/app/standalone_entry.py"
+      - "WINDOWS_X64/source_payload/**"
       - "WINDOWS_X64/VERSION.txt"
       - ".github/workflows/build-windows-launcher.yml"
   workflow_dispatch:
@@ -20,87 +19,186 @@ concurrency:
 jobs:
   build:
     if: github.actor != 'github-actions[bot]'
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          go-version: "1.23.x"
-          cache: false
+          python-version: "3.13"
 
-      - name: Build patch bundle
-        shell: bash
+      - name: Restore application source
+        shell: pwsh
         run: |
-          set -euo pipefail
-          rm -rf /tmp/there-release
-          mkdir -p /tmp/there-release/bundle/runtime/app
+          $ErrorActionPreference = "Stop"
+          Remove-Item build_src -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path build_src | Out-Null
 
-          pushd WINDOWS_X64/launcher_source >/dev/null
-          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 \
-            go build -trimpath -ldflags="-s -w" -o /tmp/there-release/bundle/THERE.exe .
-          popd >/dev/null
+          $payloadPath = "WINDOWS_X64/source_payload/app_payload.zip.b64"
+          if (-not (Test-Path $payloadPath)) { throw "Application payload is missing" }
+          $b64 = (Get-Content $payloadPath -Raw) -replace '\s',''
+          $zip = Join-Path $env:RUNNER_TEMP "there-app-payload.zip"
+          [IO.File]::WriteAllBytes($zip, [Convert]::FromBase64String($b64))
+          Expand-Archive -Path $zip -DestinationPath build_src -Force
 
-          cp WINDOWS_X64/VERSION.txt /tmp/there-release/bundle/VERSION.txt
-          cp WINDOWS_X64/runtime/app/standalone_entry.py /tmp/there-release/bundle/runtime/app/standalone_entry.py
+          Copy-Item "WINDOWS_X64/source_payload/standalone_entry.py" "build_src/standalone_entry.py" -Force
 
-          cat > /tmp/there-release/bundle/README_FIRST.txt <<'EOF'
-          THERE Windows update payload.
-          This is an in-place patch for an existing THERE installation.
-          The updater copies these files over the installed application and preserves the rest of runtime and user data.
-          User data is stored outside the application folder under %LOCALAPPDATA%\THERE\data.
-          EOF
+          # Runtime state must live outside the one-file extraction directory.
+          $serverPath = "build_src/flask_server.py"
+          $server = Get-Content $serverPath -Raw
+          $server = $server.Replace('RESTART_SCHEDULE_FILE = os.path.join(os.path.dirname(__file__), ".restart_schedule.json")', 'RESTART_SCHEDULE_FILE = os.path.join(APP_DATA_DIR, ".restart_schedule.json")')
+          $server = $server.Replace('PROMO_CODES_FILE = os.path.join(os.path.dirname(__file__), "promo_codes.json")', 'PROMO_CODES_FILE = os.path.join(APP_DATA_DIR, "promo_codes.json")')
+          [IO.File]::WriteAllText((Resolve-Path $serverPath), $server, [Text.UTF8Encoding]::new($false))
 
-          mkdir -p /tmp/there-release/dist
-          (cd /tmp/there-release/bundle && zip -9 -r /tmp/there-release/dist/THERE_WINDOWS_X64.zip . >/dev/null)
-          sha256sum /tmp/there-release/bundle/THERE.exe | awk '{print $1 "  WINDOWS_X64/THERE.exe"}' > /tmp/there-release/THERE.exe.sha256
-          SHA=$(sha256sum /tmp/there-release/dist/THERE_WINDOWS_X64.zip | awk '{print $1}')
-          VERSION=$(tr -d '\r\n ' < WINDOWS_X64/VERSION.txt)
-
-          mkdir -p /tmp/there-release/update
-          cat > /tmp/there-release/update/latest.json <<EOF
-          {
-            "version": "${VERSION}",
-            "windows_bundle_url": "https://raw.githubusercontent.com/gggg456228-droid/THERE/main/dist/THERE_WINDOWS_X64.zip",
-            "sha256": "${SHA}"
+          $required = @(
+            "standalone_entry.py",
+            "flask_server.py",
+            "embedded_templates.py",
+            "auth_system.py",
+            "backup_system.py",
+            "captcha_system.py",
+            "security_system.py"
+          )
+          foreach ($name in $required) {
+            if (-not (Test-Path "build_src/$name")) { throw "Missing source file: $name" }
           }
-          EOF
 
-      - name: Commit generated updater artifacts
-        shell: bash
+      - name: Install build dependencies
+        shell: pwsh
         run: |
-          set -euo pipefail
+          $ErrorActionPreference = "Stop"
+          python -m pip install --disable-pip-version-check --upgrade pip
+          python -m pip install --disable-pip-version-check nuitka ordered-set zstandard Flask==3.1.3 waitress==3.0.2 reportlab==4.4.9
+
+      - name: Smoke test source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          python -m py_compile build_src/*.py
+          $env:PYTHONPATH = (Resolve-Path build_src).Path
+          $env:THERE_DATA_DIR = Join-Path $env:RUNNER_TEMP "there-source-smoke-data"
+          python -c "from flask_server import app; c=app.test_client(); r=c.get('/healthz'); assert r.status_code == 200, r.status_code; print('SOURCE_HEALTHZ_OK', r.status_code)"
+
+      - name: Compile one-file THERE.exe
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Remove-Item release -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path release | Out-Null
+          python -m nuitka `
+            --onefile `
+            --windows-console-mode=force `
+            --msvc=latest `
+            --assume-yes-for-downloads `
+            --remove-output `
+            --output-dir=release `
+            --output-filename=THERE.exe `
+            --include-module=flask_server `
+            --include-module=embedded_templates `
+            --include-module=auth_system `
+            --include-module=backup_system `
+            --include-module=captcha_system `
+            --include-module=security_system `
+            --include-package=flask `
+            --include-package=jinja2 `
+            --include-package=werkzeug `
+            --include-package=waitress `
+            --include-package=reportlab `
+            --include-package-data=reportlab `
+            build_src/standalone_entry.py
+          if (-not (Test-Path "release/THERE.exe")) { throw "THERE.exe was not built" }
+
+      - name: Smoke test compiled EXE
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $env:THERE_DATA_DIR = Join-Path $env:RUNNER_TEMP "there-exe-smoke-data"
+          & "release/THERE.exe" --self-test
+          if ($LASTEXITCODE -ne 0) { throw "Compiled THERE.exe self-test failed with exit code $LASTEXITCODE" }
+
+      - name: Create release bundle
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $version = (Get-Content "WINDOWS_X64/VERSION.txt" -Raw).Trim()
+          if ($version -ne "2.6.8") { throw "Unexpected version: $version" }
+
+          $publish = Join-Path $env:RUNNER_TEMP "there-publish"
+          $bundle = Join-Path $publish "bundle"
+          Remove-Item $publish -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path (Join-Path $bundle "runtime/app") | Out-Null
+
+          Copy-Item "release/THERE.exe" (Join-Path $bundle "THERE.exe")
+          Copy-Item "WINDOWS_X64/VERSION.txt" (Join-Path $bundle "VERSION.txt")
+
+          # Kept only so old 2.6.6/2.6.7 updaters accept this transition bundle.
+          Copy-Item "WINDOWS_X64/source_payload/standalone_entry.py" (Join-Path $bundle "runtime/app/standalone_entry.py")
+
+          @"
+          THERE $version for Windows x64.
+
+          Run THERE.exe. Python, Flask, Waitress, ReportLab and the full THERE server are compiled into the executable.
+          No Python installation, pip command or manual module setup is required.
+          User data is stored in %LOCALAPPDATA%\THERE\data.
+          "@ | Set-Content (Join-Path $bundle "README_FIRST.txt") -Encoding UTF8
+
+          $zip = Join-Path $publish "THERE_WINDOWS_X64.zip"
+          Compress-Archive -Path (Join-Path $bundle "*") -DestinationPath $zip -CompressionLevel Optimal
+
+          $exeHash = (Get-FileHash "release/THERE.exe" -Algorithm SHA256).Hash.ToLower()
+          "$exeHash  WINDOWS_X64/THERE.exe" | Set-Content (Join-Path $publish "THERE.exe.sha256") -Encoding ASCII
+          $zipHash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+          @{
+            version = $version
+            windows_bundle_url = "https://raw.githubusercontent.com/gggg456228-droid/THERE/main/dist/THERE_WINDOWS_X64.zip"
+            sha256 = $zipHash
+          } | ConvertTo-Json | Set-Content (Join-Path $publish "latest.json") -Encoding UTF8
+
+      - name: Upload tested release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: THERE_WINDOWS_X64_2.6.8
+          path: |
+            release/THERE.exe
+            ${{ runner.temp }}/there-publish/THERE_WINDOWS_X64.zip
+            ${{ runner.temp }}/there-publish/latest.json
+          if-no-files-found: error
+
+      - name: Commit generated release
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          $publish = Join-Path $env:RUNNER_TEMP "there-publish"
 
-          for attempt in 1 2 3 4; do
+          for ($attempt = 1; $attempt -le 4; $attempt++) {
             git fetch origin main
             git reset --hard origin/main
 
-            mkdir -p WINDOWS_X64 dist update
-            cp /tmp/there-release/bundle/THERE.exe WINDOWS_X64/THERE.exe
-            cp /tmp/there-release/THERE.exe.sha256 WINDOWS_X64/THERE.exe.sha256
-            cp /tmp/there-release/dist/THERE_WINDOWS_X64.zip dist/THERE_WINDOWS_X64.zip
-            cp /tmp/there-release/update/latest.json update/latest.json
+            New-Item -ItemType Directory -Force -Path WINDOWS_X64, dist, update | Out-Null
+            Copy-Item (Join-Path $publish "bundle/THERE.exe") "WINDOWS_X64/THERE.exe" -Force
+            Copy-Item (Join-Path $publish "THERE.exe.sha256") "WINDOWS_X64/THERE.exe.sha256" -Force
+            Copy-Item (Join-Path $publish "THERE_WINDOWS_X64.zip") "dist/THERE_WINDOWS_X64.zip" -Force
+            Copy-Item (Join-Path $publish "latest.json") "update/latest.json" -Force
 
             git add WINDOWS_X64/THERE.exe WINDOWS_X64/THERE.exe.sha256 dist/THERE_WINDOWS_X64.zip update/latest.json
-            if git diff --cached --quiet; then
-              echo "Generated files are already current."
+            git diff --cached --quiet
+            if ($LASTEXITCODE -eq 0) {
+              Write-Host "Generated release is already current."
               exit 0
-            fi
+            }
 
-            git commit -m "Build Windows update [skip ci]"
-            if git push origin HEAD:main; then
-              exit 0
-            fi
+            git commit -m "Build standalone Windows release 2.6.8 [skip ci]"
+            git push origin HEAD:main
+            if ($LASTEXITCODE -eq 0) { exit 0 }
 
-            echo "Push raced with another commit; retrying (${attempt}/4)..."
-            sleep 2
-          done
-
-          echo "Unable to publish generated update after retries."
-          exit 1
+            Write-Host "Push raced with another commit. Retry $attempt of 4."
+            Start-Sleep -Seconds 2
+          }
+          throw "Unable to publish generated release after retries"
