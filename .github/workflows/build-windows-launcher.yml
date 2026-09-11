@@ -53,7 +53,8 @@ jobs:
           $server = Get-Content $serverPath -Raw
           $server = $server.Replace('RESTART_SCHEDULE_FILE = os.path.join(os.path.dirname(__file__), ".restart_schedule.json")', 'RESTART_SCHEDULE_FILE = os.path.join(APP_DATA_DIR, ".restart_schedule.json")')
           $server = $server.Replace('PROMO_CODES_FILE = os.path.join(os.path.dirname(__file__), "promo_codes.json")', 'PROMO_CODES_FILE = os.path.join(APP_DATA_DIR, "promo_codes.json")')
-          [IO.File]::WriteAllText((Resolve-Path $serverPath), $server, [Text.UTF8Encoding]::new($false))
+          $resolvedServerPath = (Resolve-Path $serverPath).Path
+          [IO.File]::WriteAllText($resolvedServerPath, $server, [Text.UTF8Encoding]::new($false))
 
           $required = @(
             "standalone_entry.py",
