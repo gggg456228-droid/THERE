@@ -39,12 +39,13 @@ jobs:
           Remove-Item build_src -Recurse -Force -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force -Path build_src | Out-Null
 
-          $payloadPath = "WINDOWS_X64/source_payload/app_payload.zip.b64"
+          $payloadPath = "WINDOWS_X64/source_payload/app_payload_268.tar.xz.b64"
           if (-not (Test-Path $payloadPath)) { throw "Application payload is missing" }
           $b64 = (Get-Content $payloadPath -Raw) -replace '\s',''
-          $zip = Join-Path $env:RUNNER_TEMP "there-app-payload.zip"
-          [IO.File]::WriteAllBytes($zip, [Convert]::FromBase64String($b64))
-          Expand-Archive -Path $zip -DestinationPath build_src -Force
+          $archive = Join-Path $env:RUNNER_TEMP "there-app-payload.tar.xz"
+          [IO.File]::WriteAllBytes($archive, [Convert]::FromBase64String($b64))
+          tar -xJf $archive -C build_src
+          if ($LASTEXITCODE -ne 0) { throw "Application payload extraction failed" }
 
           Copy-Item "WINDOWS_X64/source_payload/standalone_entry.py" "build_src/standalone_entry.py" -Force
 
