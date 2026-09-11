@@ -1,0 +1,1 @@
+The Windows build reconstructs application source from app_payload.zip.b64. Generated release artifacts contain a self-contained one-file THERE.exe; end users do not need Python or pip.
