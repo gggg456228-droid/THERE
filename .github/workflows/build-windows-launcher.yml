@@ -4,8 +4,9 @@ on:
   push:
     branches: [main]
     paths:
-      - "WINDOWS_X64/source_payload/**"
+      - "WINDOWS_X64/runtime/app/**"
       - "WINDOWS_X64/VERSION.txt"
+      - "requirements.txt"
       - ".github/workflows/build-windows-launcher.yml"
   workflow_dispatch:
 
@@ -30,40 +31,15 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.13"
+          python-version: "3.12"
 
-      - name: Restore application source
+      - name: Prepare application source
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
           Remove-Item build_src -Recurse -Force -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force -Path build_src | Out-Null
-
-          $payloadPath = "WINDOWS_X64/source_payload/app_payload_268.tar.xz.b64"
-          if (-not (Test-Path $payloadPath)) { throw "Application payload is missing" }
-
-          # The connector which originally uploaded this text payload can add
-          # transport characters. Keep only legal Base64 symbols before decoding.
-          $raw = Get-Content $payloadPath -Raw
-          $b64 = $raw -replace '[^A-Za-z0-9+/=]',''
-          if ($b64.Length -lt 100000) { throw "Application payload is unexpectedly short: $($b64.Length)" }
-
-          $archive = Join-Path $env:RUNNER_TEMP "there-app-payload.tar.xz"
-          [IO.File]::WriteAllBytes($archive, [Convert]::FromBase64String($b64))
-          Write-Host "Decoded application payload bytes: $((Get-Item $archive).Length)"
-          Write-Host "Decoded payload SHA256: $((Get-FileHash $archive -Algorithm SHA256).Hash.ToLower())"
-
-          tar -xJf $archive -C build_src
-          if ($LASTEXITCODE -ne 0) { throw "Application payload extraction failed" }
-
-          Copy-Item "WINDOWS_X64/source_payload/standalone_entry.py" "build_src/standalone_entry.py" -Force
-
-          # Mutable state must never live in a one-file temporary extraction dir.
-          $serverPath = "build_src/flask_server.py"
-          $server = Get-Content $serverPath -Raw
-          $server = $server.Replace('RESTART_SCHEDULE_FILE = os.path.join(os.path.dirname(__file__), ".restart_schedule.json")', 'RESTART_SCHEDULE_FILE = os.path.join(APP_DATA_DIR, ".restart_schedule.json")')
-          $server = $server.Replace('PROMO_CODES_FILE = os.path.join(os.path.dirname(__file__), "promo_codes.json")', 'PROMO_CODES_FILE = os.path.join(APP_DATA_DIR, "promo_codes.json")')
-          [IO.File]::WriteAllText((Resolve-Path $serverPath).Path, $server, [Text.UTF8Encoding]::new($false))
+          Copy-Item "WINDOWS_X64/runtime/app/*" "build_src/" -Recurse -Force
 
           $required = @(
             "standalone_entry.py",
@@ -75,8 +51,20 @@ jobs:
             "security_system.py"
           )
           foreach ($name in $required) {
-            if (-not (Test-Path "build_src/$name")) { throw "Missing source file: $name" }
+            $path = "build_src/$name"
+            if (-not (Test-Path $path)) { throw "Missing source file: $name" }
+            if ((Get-Item $path).Length -eq 0) { throw "Empty source file: $name" }
           }
+
+          # Mutable state must live outside PyInstaller's temporary extraction directory.
+          $serverPath = "build_src/flask_server.py"
+          $server = Get-Content $serverPath -Raw
+          $server = $server.Replace('RESTART_SCHEDULE_FILE = os.path.join(os.path.dirname(__file__), ".restart_schedule.json")', 'RESTART_SCHEDULE_FILE = os.path.join(APP_DATA_DIR, ".restart_schedule.json")')
+          $server = $server.Replace('PROMO_CODES_FILE = os.path.join(os.path.dirname(__file__), "promo_codes.json")', 'PROMO_CODES_FILE = os.path.join(APP_DATA_DIR, "promo_codes.json")')
+          [IO.File]::WriteAllText((Resolve-Path $serverPath).Path, $server, [Text.UTF8Encoding]::new($false))
+
+          Write-Host "Source files prepared:"
+          Get-ChildItem build_src | Select-Object Name,Length | Format-Table -AutoSize
 
       - name: Install build dependencies
         shell: pwsh
@@ -89,10 +77,14 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          python -m py_compile build_src/*.py
+          Get-ChildItem build_src -Filter *.py | ForEach-Object {
+            python -m py_compile $_.FullName
+            if ($LASTEXITCODE -ne 0) { throw "py_compile failed: $($_.Name)" }
+          }
           $env:PYTHONPATH = (Resolve-Path build_src).Path
           $env:THERE_DATA_DIR = Join-Path $env:RUNNER_TEMP "there-source-smoke-data"
           python -c "from flask_server import app; c=app.test_client(); r=c.get('/healthz'); assert r.status_code == 200, r.status_code; print('SOURCE_HEALTHZ_OK', r.status_code)"
+          if ($LASTEXITCODE -ne 0) { throw "Source health check failed" }
 
       - name: Compile one-file THERE.exe
         shell: pwsh
@@ -119,7 +111,9 @@ jobs:
             --collect-all reportlab `
             build_src/standalone_entry.py
 
+          if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed with exit code $LASTEXITCODE" }
           if (-not (Test-Path "release/THERE.exe")) { throw "THERE.exe was not built" }
+          if ((Get-Item "release/THERE.exe").Length -lt 10000000) { throw "THERE.exe is unexpectedly small" }
           Write-Host "Built THERE.exe bytes: $((Get-Item 'release/THERE.exe').Length)"
 
       - name: Smoke test compiled EXE
@@ -146,30 +140,31 @@ jobs:
 
           Copy-Item "release/THERE.exe" (Join-Path $bundle "THERE.exe")
           Copy-Item "WINDOWS_X64/VERSION.txt" (Join-Path $bundle "VERSION.txt")
+          Copy-Item "WINDOWS_X64/runtime/app/standalone_entry.py" (Join-Path $bundle "runtime/app/standalone_entry.py")
 
-          # Compatibility marker for the old 2.6.6 and 2.6.7 updaters.
-          Copy-Item "WINDOWS_X64/source_payload/standalone_entry.py" (Join-Path $bundle "runtime/app/standalone_entry.py")
+          $readme = @"
+THERE $version for Windows x64.
 
-          @"
-          THERE $version for Windows x64.
-
-          Run THERE.exe.
-          Python, Flask, Waitress, ReportLab and the complete THERE server are embedded in the executable.
-          No Python installation, pip command or manual module installation is required.
-          User data is stored in %LOCALAPPDATA%\THERE\data.
-          "@ | Set-Content (Join-Path $bundle "README_FIRST.txt") -Encoding UTF8
+Run THERE.exe.
+Python, Flask, Waitress, ReportLab and the complete THERE server are embedded in the executable.
+No Python installation, pip command or manual module installation is required.
+User data is stored in %LOCALAPPDATA%\THERE\data.
+"@
+          [IO.File]::WriteAllText((Join-Path $bundle "README_FIRST.txt"), $readme, [Text.UTF8Encoding]::new($false))
 
           $zip = Join-Path $publish "THERE_WINDOWS_X64.zip"
           Compress-Archive -Path (Join-Path $bundle "*") -DestinationPath $zip -CompressionLevel Optimal
 
           $exeHash = (Get-FileHash "release/THERE.exe" -Algorithm SHA256).Hash.ToLower()
-          "$exeHash  WINDOWS_X64/THERE.exe" | Set-Content (Join-Path $publish "THERE.exe.sha256") -Encoding ASCII
+          [IO.File]::WriteAllText((Join-Path $publish "THERE.exe.sha256"), "$exeHash  WINDOWS_X64/THERE.exe`n", [Text.ASCIIEncoding]::new())
           $zipHash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
-          @{
+          $manifest = @{
             version = $version
             windows_bundle_url = "https://raw.githubusercontent.com/gggg456228-droid/THERE/main/dist/THERE_WINDOWS_X64.zip"
             sha256 = $zipHash
-          } | ConvertTo-Json | Set-Content (Join-Path $publish "latest.json") -Encoding UTF8
+          } | ConvertTo-Json
+          [IO.File]::WriteAllText((Join-Path $publish "latest.json"), $manifest + "`n", [Text.UTF8Encoding]::new($false))
+          Write-Host "Bundle SHA256: $zipHash"
 
       - name: Upload tested release artifact
         uses: actions/upload-artifact@v4
