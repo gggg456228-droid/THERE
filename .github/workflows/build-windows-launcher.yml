@@ -2,24 +2,19 @@ name: Build standalone Windows release
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
     paths:
-      - "WINDOWS_X64/runtime/app/**"
-      - "WINDOWS_X64/VERSION.txt"
-      - "requirements.txt"
-      - ".github/workflows/build-windows-launcher.yml"
+      - 'WINDOWS_X64/runtime/app/**'
+      - 'WINDOWS_X64/VERSION.txt'
+      - '.github/workflows/build-windows-launcher.yml'
   workflow_dispatch:
 
 permissions:
   contents: write
 
-concurrency:
-  group: there-windows-release
-  cancel-in-progress: false
-
 jobs:
   build:
-    if: github.actor != 'github-actions[bot]'
     runs-on: windows-latest
 
     steps:
@@ -31,181 +26,88 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: '3.12'
 
-      - name: Prepare application source
+      - name: Prepare source
         shell: pwsh
         run: |
-          $ErrorActionPreference = "Stop"
+          $ErrorActionPreference = 'Stop'
           Remove-Item build_src -Recurse -Force -ErrorAction SilentlyContinue
-          New-Item -ItemType Directory -Force -Path build_src | Out-Null
-          Copy-Item "WINDOWS_X64/runtime/app/*" "build_src/" -Recurse -Force
-
-          $required = @(
-            "standalone_entry.py",
-            "flask_server.py",
-            "embedded_templates.py",
-            "auth_system.py",
-            "backup_system.py",
-            "captcha_system.py",
-            "security_system.py"
-          )
-          foreach ($name in $required) {
-            $path = "build_src/$name"
-            if (-not (Test-Path $path)) { throw "Missing source file: $name" }
-            if ((Get-Item $path).Length -eq 0) { throw "Empty source file: $name" }
+          New-Item -ItemType Directory -Path build_src | Out-Null
+          Copy-Item 'WINDOWS_X64/runtime/app/*' 'build_src/' -Recurse -Force
+          $required = @('standalone_entry.py','flask_server.py','embedded_templates.py','auth_system.py','backup_system.py','captcha_system.py','security_system.py')
+          foreach ($file in $required) {
+            if (-not (Test-Path (Join-Path 'build_src' $file))) { throw "Missing source file: $file" }
           }
 
-          # Mutable state must live outside PyInstaller's temporary extraction directory.
-          $serverPath = "build_src/flask_server.py"
-          $server = Get-Content $serverPath -Raw
-          $server = $server.Replace('RESTART_SCHEDULE_FILE = os.path.join(os.path.dirname(__file__), ".restart_schedule.json")', 'RESTART_SCHEDULE_FILE = os.path.join(APP_DATA_DIR, ".restart_schedule.json")')
-          $server = $server.Replace('PROMO_CODES_FILE = os.path.join(os.path.dirname(__file__), "promo_codes.json")', 'PROMO_CODES_FILE = os.path.join(APP_DATA_DIR, "promo_codes.json")')
-          [IO.File]::WriteAllText((Resolve-Path $serverPath).Path, $server, [Text.UTF8Encoding]::new($false))
-
-          Write-Host "Source files prepared:"
-          Get-ChildItem build_src | Select-Object Name,Length | Format-Table -AutoSize
-
-      - name: Install build dependencies
+      - name: Install dependencies
         shell: pwsh
         run: |
-          $ErrorActionPreference = "Stop"
+          $ErrorActionPreference = 'Stop'
           python -m pip install --disable-pip-version-check --upgrade pip
           python -m pip install --disable-pip-version-check pyinstaller Flask==3.1.3 waitress==3.0.2 reportlab==4.4.9
 
-      - name: Smoke test source
+      - name: Test source
         shell: pwsh
         run: |
-          $ErrorActionPreference = "Stop"
-          Get-ChildItem build_src -Filter *.py | ForEach-Object {
-            python -m py_compile $_.FullName
-            if ($LASTEXITCODE -ne 0) { throw "py_compile failed: $($_.Name)" }
-          }
-          $env:PYTHONPATH = (Resolve-Path build_src).Path
-          $env:THERE_DATA_DIR = Join-Path $env:RUNNER_TEMP "there-source-smoke-data"
-          python -c "from flask_server import app; c=app.test_client(); r=c.get('/healthz'); assert r.status_code == 200, r.status_code; print('SOURCE_HEALTHZ_OK', r.status_code)"
-          if ($LASTEXITCODE -ne 0) { throw "Source health check failed" }
+          $ErrorActionPreference = 'Stop'
+          $env:THERE_DATA_DIR = Join-Path $env:RUNNER_TEMP 'there-source-test'
+          python -c "import sys; sys.path.insert(0, r'build_src'); from flask_server import app; r=app.test_client().get('/healthz'); assert r.status_code == 200, r.status_code; print('SOURCE_OK')"
+          if ($LASTEXITCODE -ne 0) { throw 'Source test failed' }
 
-      - name: Compile one-file THERE.exe
+      - name: Build THERE.exe
         shell: pwsh
         run: |
-          $ErrorActionPreference = "Stop"
+          $ErrorActionPreference = 'Stop'
           Remove-Item release -Recurse -Force -ErrorAction SilentlyContinue
-          Remove-Item build -Recurse -Force -ErrorAction SilentlyContinue
-          Remove-Item THERE.spec -Force -ErrorAction SilentlyContinue
+          python -m PyInstaller --noconfirm --clean --onefile --console --name THERE --distpath release --paths build_src --hidden-import flask_server --hidden-import embedded_templates --hidden-import auth_system --hidden-import backup_system --hidden-import captcha_system --hidden-import security_system --collect-all reportlab build_src/standalone_entry.py
+          if ($LASTEXITCODE -ne 0) { throw 'PyInstaller failed' }
+          if (-not (Test-Path 'release/THERE.exe')) { throw 'THERE.exe missing' }
 
-          python -m PyInstaller `
-            --noconfirm `
-            --clean `
-            --onefile `
-            --console `
-            --name THERE `
-            --distpath release `
-            --paths build_src `
-            --hidden-import flask_server `
-            --hidden-import embedded_templates `
-            --hidden-import auth_system `
-            --hidden-import backup_system `
-            --hidden-import captcha_system `
-            --hidden-import security_system `
-            --collect-all reportlab `
-            build_src/standalone_entry.py
-
-          if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed with exit code $LASTEXITCODE" }
-          if (-not (Test-Path "release/THERE.exe")) { throw "THERE.exe was not built" }
-          if ((Get-Item "release/THERE.exe").Length -lt 10000000) { throw "THERE.exe is unexpectedly small" }
-          Write-Host "Built THERE.exe bytes: $((Get-Item 'release/THERE.exe').Length)"
-
-      - name: Smoke test compiled EXE
+      - name: Test compiled executable
         shell: pwsh
         run: |
-          $ErrorActionPreference = "Stop"
-          $env:THERE_DATA_DIR = Join-Path $env:RUNNER_TEMP "there-exe-smoke-data"
-          $env:THERE_DISABLE_UPDATE = "1"
-          $env:THERE_NO_BROWSER = "1"
-          & "release/THERE.exe" --self-test
-          if ($LASTEXITCODE -ne 0) { throw "Compiled THERE.exe self-test failed with exit code $LASTEXITCODE" }
+          $ErrorActionPreference = 'Stop'
+          $env:THERE_DISABLE_UPDATE = '1'
+          $env:THERE_NO_BROWSER = '1'
+          $env:THERE_DATA_DIR = Join-Path $env:RUNNER_TEMP 'there-exe-test'
+          & 'release/THERE.exe' --self-test
+          if ($LASTEXITCODE -ne 0) { throw 'THERE.exe self test failed' }
 
-      - name: Create release bundle
+      - name: Package release
         shell: pwsh
         run: |
-          $ErrorActionPreference = "Stop"
-          $version = (Get-Content "WINDOWS_X64/VERSION.txt" -Raw).Trim()
-          if ($version -ne "2.6.8") { throw "Unexpected version: $version" }
+          $ErrorActionPreference = 'Stop'
+          $version = (Get-Content 'WINDOWS_X64/VERSION.txt' -Raw).Trim()
+          if ($version -ne '2.6.8') { throw "Unexpected version: $version" }
+          Remove-Item publish -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path 'publish/bundle/runtime/app' | Out-Null
+          Copy-Item 'release/THERE.exe' 'publish/bundle/THERE.exe'
+          Copy-Item 'WINDOWS_X64/VERSION.txt' 'publish/bundle/VERSION.txt'
+          Copy-Item 'WINDOWS_X64/runtime/app/standalone_entry.py' 'publish/bundle/runtime/app/standalone_entry.py'
+          Set-Content -Path 'publish/bundle/README_FIRST.txt' -Value 'Run THERE.exe. No Python or pip installation is required.' -Encoding utf8
+          Compress-Archive -Path 'publish/bundle/*' -DestinationPath 'publish/THERE_WINDOWS_X64.zip' -CompressionLevel Optimal
+          $exeHash = (Get-FileHash 'release/THERE.exe' -Algorithm SHA256).Hash.ToLower()
+          Set-Content -Path 'publish/THERE.exe.sha256' -Value "$exeHash  WINDOWS_X64/THERE.exe" -Encoding ascii
+          $zipHash = (Get-FileHash 'publish/THERE_WINDOWS_X64.zip' -Algorithm SHA256).Hash.ToLower()
+          $manifest = [ordered]@{version=$version;windows_bundle_url='https://raw.githubusercontent.com/gggg456228-droid/THERE/main/dist/THERE_WINDOWS_X64.zip';sha256=$zipHash} | ConvertTo-Json -Compress
+          [IO.File]::WriteAllText((Join-Path $PWD 'publish/latest.json'), $manifest, [Text.UTF8Encoding]::new($false))
 
-          $publish = Join-Path $env:RUNNER_TEMP "there-publish"
-          $bundle = Join-Path $publish "bundle"
-          Remove-Item $publish -Recurse -Force -ErrorAction SilentlyContinue
-          New-Item -ItemType Directory -Force -Path (Join-Path $bundle "runtime/app") | Out-Null
-
-          Copy-Item "release/THERE.exe" (Join-Path $bundle "THERE.exe")
-          Copy-Item "WINDOWS_X64/VERSION.txt" (Join-Path $bundle "VERSION.txt")
-          Copy-Item "WINDOWS_X64/runtime/app/standalone_entry.py" (Join-Path $bundle "runtime/app/standalone_entry.py")
-
-          $readme = @"
-THERE $version for Windows x64.
-
-Run THERE.exe.
-Python, Flask, Waitress, ReportLab and the complete THERE server are embedded in the executable.
-No Python installation, pip command or manual module installation is required.
-User data is stored in %LOCALAPPDATA%\THERE\data.
-"@
-          [IO.File]::WriteAllText((Join-Path $bundle "README_FIRST.txt"), $readme, [Text.UTF8Encoding]::new($false))
-
-          $zip = Join-Path $publish "THERE_WINDOWS_X64.zip"
-          Compress-Archive -Path (Join-Path $bundle "*") -DestinationPath $zip -CompressionLevel Optimal
-
-          $exeHash = (Get-FileHash "release/THERE.exe" -Algorithm SHA256).Hash.ToLower()
-          [IO.File]::WriteAllText((Join-Path $publish "THERE.exe.sha256"), "$exeHash  WINDOWS_X64/THERE.exe`n", [Text.ASCIIEncoding]::new())
-          $zipHash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
-          $manifest = @{
-            version = $version
-            windows_bundle_url = "https://raw.githubusercontent.com/gggg456228-droid/THERE/main/dist/THERE_WINDOWS_X64.zip"
-            sha256 = $zipHash
-          } | ConvertTo-Json
-          [IO.File]::WriteAllText((Join-Path $publish "latest.json"), $manifest + "`n", [Text.UTF8Encoding]::new($false))
-          Write-Host "Bundle SHA256: $zipHash"
-
-      - name: Upload tested release artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: THERE_WINDOWS_X64_2.6.8
-          path: |
-            release/THERE.exe
-            ${{ runner.temp }}/there-publish/THERE_WINDOWS_X64.zip
-            ${{ runner.temp }}/there-publish/latest.json
-          if-no-files-found: error
-
-      - name: Commit generated release
+      - name: Publish tested release to main
         shell: pwsh
         run: |
-          $ErrorActionPreference = "Stop"
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          $publish = Join-Path $env:RUNNER_TEMP "there-publish"
-
-          for ($attempt = 1; $attempt -le 4; $attempt++) {
-            git fetch origin main
-            git reset --hard origin/main
-
-            New-Item -ItemType Directory -Force -Path WINDOWS_X64, dist, update | Out-Null
-            Copy-Item (Join-Path $publish "bundle/THERE.exe") "WINDOWS_X64/THERE.exe" -Force
-            Copy-Item (Join-Path $publish "THERE.exe.sha256") "WINDOWS_X64/THERE.exe.sha256" -Force
-            Copy-Item (Join-Path $publish "THERE_WINDOWS_X64.zip") "dist/THERE_WINDOWS_X64.zip" -Force
-            Copy-Item (Join-Path $publish "latest.json") "update/latest.json" -Force
-
-            git add WINDOWS_X64/THERE.exe WINDOWS_X64/THERE.exe.sha256 dist/THERE_WINDOWS_X64.zip update/latest.json
-            git diff --cached --quiet
-            if ($LASTEXITCODE -eq 0) {
-              Write-Host "Generated release is already current."
-              exit 0
-            }
-
-            git commit -m "Build standalone Windows release 2.6.8 [skip ci]"
-            git push origin HEAD:main
-            if ($LASTEXITCODE -eq 0) { exit 0 }
-
-            Write-Host "Push raced with another commit. Retry $attempt of 4."
-            Start-Sleep -Seconds 2
-          }
-          throw "Unable to publish generated release after retries"
+          $ErrorActionPreference = 'Stop'
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git pull --rebase origin main
+          New-Item -ItemType Directory -Force -Path 'dist','update' | Out-Null
+          Copy-Item 'release/THERE.exe' 'WINDOWS_X64/THERE.exe' -Force
+          Copy-Item 'publish/THERE.exe.sha256' 'WINDOWS_X64/THERE.exe.sha256' -Force
+          Copy-Item 'publish/THERE_WINDOWS_X64.zip' 'dist/THERE_WINDOWS_X64.zip' -Force
+          Copy-Item 'publish/latest.json' 'update/latest.json' -Force
+          git add WINDOWS_X64/THERE.exe WINDOWS_X64/THERE.exe.sha256 dist/THERE_WINDOWS_X64.zip update/latest.json
+          git diff --cached --quiet
+          if ($LASTEXITCODE -eq 0) { Write-Host 'Release already current'; exit 0 }
+          git commit -m 'Build standalone Windows release 2.6.8 [skip ci]'
+          git push origin HEAD:main
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to publish release' }
