@@ -11,9 +11,6 @@ import android.widget.Button;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import java.net.HttpURLConnection;
-import java.net.URL;
-
 public class MainActivity extends Activity {
     private final Handler main = new Handler(Looper.getMainLooper());
     private TextView status;
@@ -74,10 +71,10 @@ public class MainActivity extends Activity {
     private void waitForReady(boolean openAfterStart, int attempt) {
         if (ThereServerService.isRunning()) {
             String url = ThereServerService.getCurrentUrl();
-            if (!url.isEmpty() && healthOk(url)) {
+            if (!url.isEmpty()) {
                 refreshState();
                 if (openAfterStart) {
-                    openInBrowser(url);
+                    main.postDelayed(() -> openInBrowser(url), 200);
                 }
                 return;
             }
@@ -95,20 +92,6 @@ public class MainActivity extends Activity {
             return;
         }
         main.postDelayed(() -> waitForReady(openAfterStart, attempt + 1), 100);
-    }
-
-    private boolean healthOk(String baseUrl) {
-        try {
-            HttpURLConnection connection = (HttpURLConnection) new URL(baseUrl + "healthz").openConnection();
-            connection.setConnectTimeout(350);
-            connection.setReadTimeout(350);
-            connection.setUseCaches(false);
-            int code = connection.getResponseCode();
-            connection.disconnect();
-            return code == 200;
-        } catch (Exception ignored) {
-            return false;
-        }
     }
 
     private void openInBrowser(String url) {
