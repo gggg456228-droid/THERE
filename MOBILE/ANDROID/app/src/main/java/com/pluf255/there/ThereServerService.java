@@ -9,8 +9,6 @@ import android.content.Intent;
 import android.os.Build;
 import android.os.IBinder;
 
-import androidx.annotation.Nullable;
-
 import com.chaquo.python.PyObject;
 import com.chaquo.python.Python;
 
@@ -165,7 +163,6 @@ public class ThereServerService extends Service {
         super.onDestroy();
     }
 
-    @Nullable
     @Override
     public IBinder onBind(Intent intent) {
         return null;
