@@ -1,0 +1,6 @@
+<resources>
+    <color name="there_bg">#090911</color>
+    <color name="there_gold">#FFD700</color>
+    <color name="there_text">#F6F6FA</color>
+    <color name="there_muted">#A6A6B8</color>
+</resources>

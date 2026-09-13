@@ -1,0 +1,37 @@
+name: Verify THERE iOS source
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "MOBILE/IOS/**"
+      - ".github/workflows/verify-ios.yml"
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: macos-15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: |
+          cd MOBILE/IOS
+          xcodegen generate
+
+      - name: Build for iPhone Simulator
+        run: |
+          cd MOBILE/IOS
+          xcodebuild \
+            -project THEREiOS.xcodeproj \
+            -scheme THEREiOS \
+            -sdk iphonesimulator \
+            -configuration Release \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            build

@@ -1,0 +1,10 @@
+<resources>
+    <style name="Theme.THERE" parent="android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:statusBarColor">#090911</item>
+        <item name="android:navigationBarColor">#090911</item>
+        <item name="android:windowBackground">#090911</item>
+        <item name="android:colorAccent">#FFD700</item>
+    </style>
+</resources>

@@ -1,0 +1,64 @@
+name: Build THERE Android
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "MOBILE/ANDROID/**"
+      - "WINDOWS_X64/runtime/app/**"
+      - ".github/workflows/build-android.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: there-android-build
+  cancel-in-progress: true
+
+jobs:
+  build:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.10.2"
+
+      - name: Build installable ARM64 APK
+        run: gradle -p MOBILE/ANDROID :app:assembleDebug --stacktrace
+
+      - name: Verify APK exists
+        run: |
+          test -f MOBILE/ANDROID/app/build/outputs/apk/debug/app-debug.apk
+          ls -lh MOBILE/ANDROID/app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Publish APK to dist
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cp MOBILE/ANDROID/app/build/outputs/apk/debug/app-debug.apk dist/THERE_ANDROID_ARM64_2.6.8.apk
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add dist/THERE_ANDROID_ARM64_2.6.8.apk
+          if git diff --cached --quiet; then
+            echo "APK is already current"
+            exit 0
+          fi
+          git commit -m "Build Android release 2.6.8 [skip ci]"
+          git push origin HEAD:main

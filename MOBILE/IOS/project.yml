@@ -1,0 +1,26 @@
+name: THEREiOS
+options:
+  deploymentTarget:
+    iOS: "16.0"
+settings:
+  base:
+    SWIFT_VERSION: 5.0
+    PRODUCT_NAME: THERE
+
+targets:
+  THEREiOS:
+    type: application
+    platform: iOS
+    sources:
+      - THEREiOS
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.pluf255.there.ios
+        TARGETED_DEVICE_FAMILY: "1,2"
+    info:
+      path: THEREiOS/Info.plist
+      properties:
+        CFBundleDisplayName: THERE
+        UILaunchScreen: {}
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
