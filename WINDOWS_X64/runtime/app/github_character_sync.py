@@ -10,7 +10,7 @@ from urllib.request import Request, urlopen
 
 MAX_RESPONSE_BYTES = 6 * 1024 * 1024
 MAX_FILE_BYTES = 2 * 1024 * 1024
-MAX_JSON_FILES = 20
+MAX_JSON_FILES = 60
 MAX_CHARACTERS = 200
 
 
@@ -213,8 +213,7 @@ def _repo_json_files(parts: dict[str, str]) -> tuple[str, list[dict]]:
         found.append({"path": path, "size": size, "score": _candidate_score(path)})
 
     found.sort(key=lambda item: item["score"])
-    likely = [item for item in found if item["score"][0] < 10]
-    return branch, (likely or found)[:MAX_JSON_FILES]
+    return branch, found[:MAX_JSON_FILES]
 
 
 def load_github_characters(raw_url: str) -> list[dict]:

@@ -79,7 +79,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $version = (Get-Content 'WINDOWS_X64/VERSION.txt' -Raw).Trim()
-          if ($version -ne '2.6.9') { throw "Unexpected version: $version" }
+          if ($version -ne '2.6.10') { throw "Unexpected version: $version" }
           Remove-Item publish -Recurse -Force -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force -Path 'publish/bundle/runtime/app' | Out-Null
           Copy-Item 'release/THERE.exe' 'publish/bundle/THERE.exe'
@@ -108,6 +108,6 @@ jobs:
           git add WINDOWS_X64/THERE.exe WINDOWS_X64/THERE.exe.sha256 dist/THERE_WINDOWS_X64.zip update/latest.json
           git diff --cached --quiet
           if ($LASTEXITCODE -eq 0) { Write-Host 'Release already current'; exit 0 }
-          git commit -m 'Build standalone Windows release 2.6.9 [skip ci]'
+          git commit -m 'Build standalone Windows release 2.6.10 [skip ci]'
           git push origin HEAD:main
           if ($LASTEXITCODE -ne 0) { throw 'Failed to publish release' }

@@ -15,7 +15,7 @@ import urllib.request
 import webbrowser
 import zipfile
 
-APP_VERSION = "2.6.9"
+APP_VERSION = "2.6.10"
 HOST = "127.0.0.1"
 LINK_TEXT = "https://t.me/pluf255"
 UPDATE_MANIFEST_URL = "https://raw.githubusercontent.com/gggg456228-droid/THERE/main/update/latest.json"
@@ -58,14 +58,14 @@ def _installation_root():
 
 
 def _read_local_version(root):
+    file_version = ""
     try:
-        value = (root / "VERSION.txt").read_text(encoding="utf-8").strip()
-        if value:
-            return value
+        file_version = (root / "VERSION.txt").read_text(encoding="utf-8").strip()
     except Exception:
         pass
+    if file_version and _version_tuple(file_version) > _version_tuple(APP_VERSION):
+        return file_version
     return APP_VERSION
-
 
 def _download_bytes(url, limit):
     req = urllib.request.Request(url, headers={"User-Agent": UPDATE_USER_AGENT})
@@ -89,7 +89,7 @@ def _safe_extract_zip(archive_path, target_dir):
         archive.extractall(target_dir)
 
 
-def _schedule_update(new_exe, temp_root):
+def _schedule_update(new_exe, temp_root, remote_version):
     if os.name != "nt":
         return False
     current_exe = _executable_path()
@@ -111,6 +111,7 @@ def _schedule_update(new_exe, temp_root):
         "  timeout /t 1 /nobreak >NUL",
         "  goto copy_retry",
         ")",
+        f'> "{current_exe.parent / "VERSION.txt"}" echo {remote_version}',
         f'start "" "{current_exe}" --skip-update-once',
         f'rmdir /S /Q "{temp_root}" 2>NUL',
         'del "%~f0"',
@@ -156,7 +157,7 @@ def maybe_update_from_github():
         new_exe = extracted / "THERE.exe"
         if not new_exe.is_file():
             raise RuntimeError("В пакете обновления отсутствует THERE.exe")
-        if _schedule_update(new_exe, temp_root):
+        if _schedule_update(new_exe, temp_root, remote_version):
             print("Обновление загружено. THERE перезапустится автоматически.")
             return True
     except Exception as exc:

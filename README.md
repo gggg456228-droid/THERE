@@ -11,7 +11,7 @@ https://raw.githubusercontent.com/gggg456228-droid/THERE/main/dist/THERE_WINDOWS
 Latest Android ARM64 APK:
 https://raw.githubusercontent.com/gggg456228-droid/THERE/main/dist/THERE_ANDROID_ARM64.apk
 
-Current release: `2.6.9`.
+Current release: `2.6.10`.
 
 THERE is a local character and campaign application. The Windows release is a single self-contained `THERE.exe`.
 

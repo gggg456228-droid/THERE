@@ -56,15 +56,15 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          cp MOBILE/ANDROID/app/build/outputs/apk/debug/app-debug.apk dist/THERE_ANDROID_ARM64_2.6.9.apk
+          cp MOBILE/ANDROID/app/build/outputs/apk/debug/app-debug.apk dist/THERE_ANDROID_ARM64_2.6.10.apk
           cp MOBILE/ANDROID/app/build/outputs/apk/debug/app-debug.apk dist/THERE_ANDROID_ARM64.apk
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add dist/THERE_ANDROID_ARM64_2.6.9.apk dist/THERE_ANDROID_ARM64.apk
+          git add dist/THERE_ANDROID_ARM64_2.6.10.apk dist/THERE_ANDROID_ARM64.apk
           if git diff --cached --quiet; then
             echo "APK is already current"
             exit 0
           fi
-          git commit -m "Build Android release 2.6.9 [skip ci]"
+          git commit -m "Build Android release 2.6.10 [skip ci]"
           git push origin HEAD:main

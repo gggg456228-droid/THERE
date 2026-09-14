@@ -1832,6 +1832,36 @@ def api_github_characters_targets():
     return jsonify({'ok': True, 'targets': targets})
 
 
+GITHUB_SYNC_SOURCES_FILE = os.path.join(APP_DATA_DIR, "github_sync_sources.json")
+GITHUB_SYNC_SOURCES_LOCK = threading.RLock()
+
+def _load_github_sync_sources():
+    try:
+        with GITHUB_SYNC_SOURCES_LOCK:
+            if not os.path.exists(GITHUB_SYNC_SOURCES_FILE): return {}
+            with open(GITHUB_SYNC_SOURCES_FILE, "r", encoding="utf-8") as f: data = json.load(f)
+            return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+def _remember_github_sync_source(username, source_url):
+    username = str(username or '').strip(); source_url = str(source_url or '').strip()
+    if not username or not source_url: return
+    with GITHUB_SYNC_SOURCES_LOCK:
+        data = _load_github_sync_sources(); items = data.get(username) if isinstance(data.get(username), list) else []
+        items = [source_url] + [x for x in items if isinstance(x, str) and x != source_url]
+        data[username] = items[:20]
+        tmp = GITHUB_SYNC_SOURCES_FILE + '.tmp'
+        with open(tmp, 'w', encoding='utf-8') as f: json.dump(data, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, GITHUB_SYNC_SOURCES_FILE)
+
+@app.route('/api/github-characters/sources', methods=['GET'])
+@require_login
+def api_github_character_sources():
+    username = (session.get('username') or '').strip()
+    data = _load_github_sync_sources()
+    return jsonify({'ok': True, 'sources': data.get(username, [])[:20]})
+
 @app.route('/api/github-characters/preview', methods=['POST'])
 @require_login
 def api_github_characters_preview():
@@ -1839,6 +1869,7 @@ def api_github_characters_preview():
     source_url = str(payload.get('url') or '').strip()
     try:
         items = load_github_characters(source_url)
+        _remember_github_sync_source(session.get('username'), source_url)
         return jsonify({'ok': True, 'characters': character_summaries(items)})
     except GitHubSyncError as error:
         return jsonify({'ok': False, 'error': str(error)}), 400
