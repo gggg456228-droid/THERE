@@ -67,4 +67,5 @@ jobs:
             exit 0
           fi
           git commit -m "Build Android release 2.6.10 [skip ci]"
+          git pull --rebase origin main
           git push origin HEAD:main
