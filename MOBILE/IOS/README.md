@@ -1,7 +1,11 @@
 # THERE iOS
 
-This iOS target intentionally contains no WebView, WKWebView or in-app browser. The user enters a THERE server URL and the site opens only after pressing "Открыть сайт", using the system browser.
+This iOS target intentionally contains no WebView, WKWebView or in-app browser. The app opens the production THERE server only after pressing "Открыть THERE", using the system browser.
 
-Important iOS limitation: a localhost Flask server started inside this app cannot reliably keep running after Safari takes the foreground because iOS suspends normal background apps. Therefore this external-browser-only iOS target is a launcher for an externally reachable THERE server.
+Production server:
+
+`https://153-76-209-99.sslip.io/`
+
+Authentication, account data and saved THERE state are handled by the VPS server. The iOS app does not contain VPS credentials or private server secrets.
 
 The source is verified by GitHub Actions against the iPhone Simulator. Installing on a physical iPhone requires Apple code signing in Xcode with the user's Apple ID or developer certificate.
