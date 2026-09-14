@@ -15,7 +15,7 @@ import urllib.request
 import webbrowser
 import zipfile
 
-APP_VERSION = "2.6.8"
+APP_VERSION = "2.6.9"
 HOST = "127.0.0.1"
 LINK_TEXT = "https://t.me/pluf255"
 UPDATE_MANIFEST_URL = "https://raw.githubusercontent.com/gggg456228-droid/THERE/main/update/latest.json"

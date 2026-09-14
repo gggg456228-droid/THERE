@@ -19,6 +19,7 @@ from urllib.parse import quote
 from pathlib import Path
 from jinja2 import DictLoader
 from embedded_templates import TEMPLATES
+from github_character_sync import GitHubSyncError, character_summaries, load_github_characters
 
 # Импорт модулей безопасности
 from auth_system import (
@@ -1811,6 +1812,94 @@ def api_copygame_reset():
 def index():
     characters = load_characters()
     return render_template('index.html', characters=characters, races=DEFAULT_RACES, classes=CLASSES, skills=SKILLS, alignments=ALIGNMENTS, skill_to_stat=SKILL_TO_STAT, is_admin=False, auto_open_create=(len(characters) == 0))
+
+
+
+@app.route('/api/github-characters/targets', methods=['GET'])
+@require_login
+def api_github_characters_targets():
+    characters = load_characters()
+    username = (session.get('username') or '').strip()
+    targets = []
+    for name, character in characters.items():
+        if not _player_can_access_character(username, name, characters):
+            continue
+        display_name = name
+        if isinstance(character, dict):
+            display_name = str(character.get('name') or name)
+        targets.append({'name': name, 'display_name': display_name[:120]})
+    targets.sort(key=lambda item: item['display_name'].casefold())
+    return jsonify({'ok': True, 'targets': targets})
+
+
+@app.route('/api/github-characters/preview', methods=['POST'])
+@require_login
+def api_github_characters_preview():
+    payload = request.get_json(silent=True) or request.form or {}
+    source_url = str(payload.get('url') or '').strip()
+    try:
+        items = load_github_characters(source_url)
+        return jsonify({'ok': True, 'characters': character_summaries(items)})
+    except GitHubSyncError as error:
+        return jsonify({'ok': False, 'error': str(error)}), 400
+    except Exception as error:
+        log_action('GITHUB_CHARACTER_PREVIEW_FAILED', session.get('username'), {'error': str(error)[:300]})
+        return jsonify({'ok': False, 'error': 'Не удалось прочитать персонажей с GitHub'}), 500
+
+
+@app.route('/api/github-characters/update', methods=['POST'])
+@require_login
+def api_github_characters_update():
+    payload = request.get_json(silent=True) or request.form or {}
+    source_url = str(payload.get('url') or '').strip()
+    source_key = str(payload.get('source_key') or '').strip()
+    target_name = str(payload.get('target') or '').strip()
+    username = (session.get('username') or '').strip()
+
+    if not target_name or not source_key:
+        return jsonify({'ok': False, 'error': 'Выбери персонажа для обновления'}), 400
+    if not _player_can_access_character(username, target_name):
+        return jsonify({'ok': False, 'error': 'Нет доступа к этому персонажу'}), 403
+
+    characters = load_characters()
+    _ensure_owner_for_legacy(username, target_name, characters)
+    if target_name not in characters:
+        return jsonify({'ok': False, 'error': 'Персонаж не найден'}), 404
+
+    try:
+        remote_items = load_github_characters(source_url)
+        remote = next((item for item in remote_items if item.get('key') == source_key), None)
+        if remote is None:
+            raise GitHubSyncError('Персонаж больше не найден в GitHub источнике')
+
+        current = characters[target_name]
+        bonuses = get_equipment_bonuses(current)
+        imported = remote.get('data') or {}
+        if _looks_like_lss_payload(imported):
+            imported = _convert_lss_payload(imported)
+        sanitized = _sanitize_import_character(imported, target_name, current, bonuses)
+        characters[target_name] = sanitized
+        if not save_characters(characters):
+            raise RuntimeError('save_failed')
+
+        log_action('CHARACTER_UPDATED_FROM_GITHUB', username, {
+            'character': target_name,
+            'source_character': str(remote.get('name') or '')[:120],
+            'source_path': str(remote.get('source_path') or '')[:300],
+        })
+        return jsonify({
+            'ok': True,
+            'target': target_name,
+            'source_name': remote.get('name') or '',
+        })
+    except GitHubSyncError as error:
+        return jsonify({'ok': False, 'error': str(error)}), 400
+    except Exception as error:
+        log_action('GITHUB_CHARACTER_UPDATE_FAILED', username, {
+            'character': target_name,
+            'error': str(error)[:300],
+        })
+        return jsonify({'ok': False, 'error': 'Не удалось обновить персонажа'}), 500
 
 
 @app.route('/api/presence/ping', methods=['POST'])
