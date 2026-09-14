@@ -1,8 +1,9 @@
 import SwiftUI
 
 struct ContentView: View {
-    @AppStorage("there.server.url") private var serverURL = ""
     @Environment(\.openURL) private var openURL
+
+    private let serverURL = URL(string: "https://153-76-209-99.sslip.io/")!
 
     var body: some View {
         ZStack {
@@ -16,23 +17,17 @@ struct ContentView: View {
                     .font(.system(size: 42, weight: .bold))
                     .foregroundStyle(Color.yellow)
 
-                TextField("https://your-there-server.example", text: $serverURL)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .keyboardType(.URL)
-                    .padding(14)
-                    .background(Color.white.opacity(0.08))
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
-                    .foregroundStyle(.white)
+                Text("Серверная версия")
+                    .font(.headline)
+                    .foregroundStyle(Color.white.opacity(0.72))
 
-                Button("Открыть сайт") {
-                    openSite()
+                Button("Открыть THERE") {
+                    openURL(serverURL)
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
-                .disabled(normalizedURL == nil)
 
-                Text("Сайт всегда открывается во внешнем браузере. Встроенного WebView здесь нет.")
+                Text("Авторизация и сохранения работают на сервере. Сайт открывается только во внешнем браузере.")
                     .font(.footnote)
                     .foregroundStyle(Color.white.opacity(0.6))
                     .multilineTextAlignment(.center)
@@ -41,19 +36,5 @@ struct ContentView: View {
             }
             .padding(24)
         }
-    }
-
-    private var normalizedURL: URL? {
-        let value = serverURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !value.isEmpty else { return nil }
-        if let url = URL(string: value), url.scheme != nil {
-            return url
-        }
-        return URL(string: "https://" + value)
-    }
-
-    private func openSite() {
-        guard let url = normalizedURL else { return }
-        openURL(url)
     }
 }
